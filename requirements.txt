@@ -1,0 +1,5 @@
+# Clash Mi Gemini Guardian Dependencies
+# Core scripts run on Python standard library.
+# The following packages power the Windows System Tray and 3D Icon generator:
+pywin32>=306
+Pillow>=10.0.0

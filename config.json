@@ -1,0 +1,24 @@
+{
+  "clash_api_url": "http://127.0.0.1:9090",
+  "clash_api_secret": "auto",
+  "service_json_path": "auto",
+  "mixed_proxy_url": "http://127.0.0.1:7890",
+  "gemini_test_urls": [
+    "https://generativelanguage.googleapis.com",
+    "https://alkalimakersuite-pa.googleapis.com"
+  ],
+  "timeout_seconds": 6,
+  "max_workers": 12,
+  "daemon_interval_seconds": 180,
+  "notification_enabled": true,
+  "auto_switch_all_matched_groups": true,
+  "target_group_keywords": [
+    "节点选择",
+    "PROXY",
+    "GLOBAL",
+    "Proxies",
+    "Select",
+    "节点",
+    "Proxy"
+  ]
+}

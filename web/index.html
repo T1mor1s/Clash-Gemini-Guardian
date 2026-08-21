@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clash Mi - Gemini 智能守护仪表盘</title>
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- 顶部导航栏 -->
+    <header class="app-header">
+      <div class="header-left">
+        <img src="icon.png" class="app-logo-img" alt="Clash Mi Guardian Logo">
+        <div>
+          <h1 class="app-title">Clash Mi 智能守护</h1>
+          <p class="app-subtitle">Google Gemini & Antigravity 节点体检与自动优选控制台</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <div id="clashStatusBadge" class="status-pill checking">
+          <span class="status-dot"></span>
+          <span id="clashStatusText">检测 Clash 连接...</span>
+        </div>
+        <button id="themeToggleBtn" class="icon-btn" title="切换深浅主题">🌓</button>
+      </div>
+    </header>
+
+    <!-- 顶部核心状态看板 -->
+    <section class="overview-section">
+      <!-- 当前使用节点卡片 -->
+      <div class="card hero-card">
+        <div class="card-label">当前活跃节点</div>
+        <div class="active-node-info">
+          <div id="activeNodeFlag" class="node-flag-large">🌐</div>
+          <div class="node-details">
+            <div id="activeNodeName" class="active-node-title">获取中...</div>
+            <div class="active-node-meta">
+              <span id="activeNodeDelay" class="badge badge-neutral">延迟: -- ms</span>
+              <span id="activeNodeStatus" class="badge badge-neutral">状态检测中</span>
+              <span id="activeNodeGroup" class="badge badge-info">策略组: 节点选择</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 自动守护与控制卡片 -->
+      <div class="card control-card">
+        <div class="card-label">智能守护服务</div>
+        <div class="guardian-control-row">
+          <div class="guardian-status-box">
+            <div class="guardian-title">后台实时守护</div>
+            <div class="guardian-desc" id="guardianDesc">监控中：节点恶化或断流时毫秒级自动切换</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="guardianToggle" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="action-buttons-row">
+          <button id="benchmarkBtn" class="btn btn-primary">
+            <span class="btn-icon">🚀</span>
+            <span class="btn-text">一键体检与最优切换</span>
+          </button>
+          <button id="refreshBtn" class="btn btn-secondary">
+            <span class="btn-icon">🔄</span>
+            <span class="btn-text">刷新状态</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 过滤与搜索工具栏 -->
+    <section class="filter-toolbar">
+      <div class="region-tabs" id="regionTabs">
+        <button class="tab-btn active" data-region="ALL">全部 (<span id="countAll">0</span>)</button>
+        <button class="tab-btn" data-region="TW">🇹🇼 台湾 (<span id="countTW">0</span>)</button>
+        <button class="tab-btn" data-region="JP">🇯🇵 日本 (<span id="countJP">0</span>)</button>
+        <button class="tab-btn" data-region="SG">🇸🇬 新加坡 (<span id="countSG">0</span>)</button>
+        <button class="tab-btn" data-region="MY">🇲🇾 马来西亚 (<span id="countMY">0</span>)</button>
+        <button class="tab-btn" data-region="KR">🇰🇷 韩国 (<span id="countKR">0</span>)</button>
+        <button class="tab-btn" data-region="US">🇺🇸 美国 (<span id="countUS">0</span>)</button>
+        <button class="tab-btn" data-region="EU">🇪🇺 欧洲 (<span id="countEU">0</span>)</button>
+        <button class="tab-btn" data-region="RESTRICTED">🟡 香港/受限 (<span id="countRestricted">0</span>)</button>
+      </div>
+
+      <div class="search-box-wrapper">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="searchInput" placeholder="搜索节点名称..." class="search-input">
+        <button id="clearSearchBtn" class="clear-btn" style="display:none;">✕</button>
+      </div>
+    </section>
+
+    <!-- 节点列表卡片网格 -->
+    <section class="nodes-grid-section">
+      <div class="section-header">
+        <h2 class="section-title">节点健康列表</h2>
+        <div class="section-meta" id="nodesSummaryText">加载中...</div>
+      </div>
+      <div id="nodesGrid" class="nodes-grid">
+        <div class="loading-placeholder">
+          <div class="spinner"></div>
+          <div>正在深度探测 Gemini 节点连通性，请稍候...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 实时心跳与活动日志面板 -->
+    <section class="log-section card">
+      <div class="log-header" id="logHeader">
+        <div class="log-title">
+          <span>📜 实时守护与心跳日志</span>
+          <span class="log-live-dot"></span>
+        </div>
+        <button id="clearLogBtn" class="btn-text-sm">清空日志</button>
+      </div>
+      <div class="log-console" id="logConsole">
+        <div class="log-entry log-info">[系统就绪] Clash Mi Gemini 智能守护前端已启动。</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Toast 桌面提示框容器 -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

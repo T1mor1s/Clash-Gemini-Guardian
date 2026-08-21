@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local User Caches and Data
+web_cache/
+*.log
+_temp_shortcut.vbs
+
+# Windows Shortcuts & Artifacts
+*.lnk
+
+# Packaging outputs & Archives
+dist/
+build/
+*.spec
+*.zip
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
