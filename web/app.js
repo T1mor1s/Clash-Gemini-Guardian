@@ -29,7 +29,6 @@ const logConsole = document.getElementById('logConsole');
 const clearLogBtn = document.getElementById('clearLogBtn');
 const themeToggleBtn = document.getElementById('themeToggleBtn');
 
-// 国家/地区 Flag 提取
 function extractFlag(name) {
   const emojiRegex = /(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/;
   const match = name.match(emojiRegex);
@@ -46,6 +45,10 @@ function extractFlag(name) {
   if (lower.includes('netherlands') || lower.includes('nl') || lower.includes('荷兰')) return '🇳🇱';
   if (lower.includes('hong') || lower.includes('hk') || lower.includes('香港')) return '🇭🇰';
   return '🌐';
+}
+
+function cleanDisplayName(name) {
+  return name.replace(/^[\uD83C-\uDBFF\uDC00-\uDFFF\s]+/g, '').trim() || name;
 }
 
 function classifyRegion(name) {
@@ -229,7 +232,7 @@ function renderNodes() {
         <div class="node-card-top">
           <div class="node-card-flag">${flag}</div>
           <div class="node-card-info">
-            <div class="node-card-name" title="${node.name}">${node.name}</div>
+            <div class="node-card-name" title="${node.name}">${cleanDisplayName(node.name)}</div>
             <div class="node-card-tags">
               ${statusBadgeHtml}
               ${delayBadgeHtml}

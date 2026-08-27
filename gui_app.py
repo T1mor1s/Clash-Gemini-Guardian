@@ -8,6 +8,7 @@ Clash Mi 智能节点体检与自动优选控制台 (Desktop App + System Tray)
 2. 现代化可视化 Web 独立窗口客户端 (带专属 Fluent 3D 图标)。
 3. 后台 HTTP API 微服务与 Google Gemini 深度测速引擎。
 4. Windows 任务栏系统托盘常驻与右键菜单（支持安全退出与托盘图标自动清理）。
+5. 支持 PyInstaller 一键编译为独立单文件 EXE。
 """
 
 import os
@@ -38,10 +39,19 @@ def safe_reconfigure_io():
 safe_reconfigure_io()
 
 PORT = 18989
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 路径兼容：支持 Python 源码运行与 PyInstaller 单文件 EXE 模式
+if getattr(sys, 'frozen', False):
+    BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    RUNTIME_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    RUNTIME_DIR = BASE_DIR
+
 WEB_DIR = os.path.join(BASE_DIR, "web")
-USER_DATA_DIR = os.path.join(BASE_DIR, "web_cache")
+USER_DATA_DIR = os.path.join(RUNTIME_DIR, "web_cache")
 ICO_PATH = os.path.join(BASE_DIR, "app.ico")
+CONFIG_PATH = os.path.join(RUNTIME_DIR, "config.json")
 MUTEX_NAME = "Global\\ClashMiGeminiGuardian_SingleInstance_Mutex_v1"
 
 global_tray_instance = None
@@ -60,7 +70,7 @@ atexit.register(cleanup_tray_icon)
 
 class AppState:
     def __init__(self):
-        self.guardian = ClashMiGuardian("config.json")
+        self.guardian = ClashMiGuardian(CONFIG_PATH)
         self.guardian_enabled = True
         self.cached_nodes = []
         self.active_node = None
@@ -186,13 +196,9 @@ class GuardianAPIHandler(SimpleHTTPRequestHandler):
                 state.active_delay = best_node["delay"]
                 state.active_status = "OK"
                 
-                if selector_groups:
-                    for gname, ginfo in selector_groups.items():
-                        if any(kw in gname for kw in state.guardian.target_keywords) or gname == "GLOBAL":
-                            state.guardian.switch_node(gname, best_node["name"])
-
+                switched = state.guardian.switch_all_active_groups(best_node["name"])
                 show_windows_toast("Clash Mi 智能优选", f"已切换至最优节点: {best_node['name']} ({best_node['delay']}ms)")
-                state.add_log(f"体检完成，已自动切换至最优节点: {best_node['name']} ({best_node['delay']}ms)", "success")
+                state.add_log(f"体检完成，已全量同步切换策略组至: {best_node['name']} ({best_node['delay']}ms)，并已清理旧长连接", "success")
             else:
                 state.add_log("警告: 全量体检未发现完全支持 Gemini 的节点！", "warn")
 
@@ -209,21 +215,13 @@ class GuardianAPIHandler(SimpleHTTPRequestHandler):
                 self.send_json({"ok": False, "msg": "缺少节点名称"})
                 return
 
-            _, selector_groups = state.guardian.get_proxies_data()
-            switched_groups = []
-            if selector_groups:
-                for gname in selector_groups.keys():
-                    if any(kw in gname for kw in state.guardian.target_keywords) or gname == "GLOBAL":
-                        sw_ok, _ = state.guardian.switch_node(gname, target_name)
-                        if sw_ok:
-                            switched_groups.append(gname)
-
+            switched_groups = state.guardian.switch_all_active_groups(target_name)
             if switched_groups:
                 state.active_node = target_name
                 probe_res = state.guardian.probe_node(target_name)
                 state.active_delay = probe_res["delay"]
                 state.active_status = probe_res["status"]
-                state.add_log(f"已手动切换策略组至: {target_name} ({probe_res['desc']})", "success")
+                state.add_log(f"已全量同步切换策略组至: {target_name} ({probe_res['desc']})，并刷新长连接", "success")
                 show_windows_toast("Clash Mi 节点切换", f"已切换至: {target_name}")
                 self.send_json({"ok": True, "switched_groups": switched_groups})
             else:
@@ -413,9 +411,7 @@ def main():
     mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
     last_error = kernel32.GetLastError()
     
-    # 183 = ERROR_ALREADY_EXISTS
     if last_error == 183:
-        # 已有实例在运行：直接唤起控制台窗口并安全秒退
         open_ui_window()
         sys.exit(0)
 
