@@ -118,28 +118,38 @@ class GuardianAPIHandler(SimpleHTTPRequestHandler):
 
         if path == "/api/status":
             ok, ver = state.guardian.test_connection()
+            ok_conf, conf = state.guardian._api_request("/configs")
+            clash_mode = (conf.get("mode", "rule") if ok_conf and isinstance(conf, dict) else "rule").lower()
             _, selector_groups = state.guardian.get_proxies_data()
+            
             active_node = None
-            active_group = "节点选择"
+            active_group = "GLOBAL" if clash_mode == "global" else "节点选择"
+
             if selector_groups:
-                for kw in state.guardian.target_keywords:
-                    for gname, ginfo in selector_groups.items():
-                        if kw in gname:
-                            active_node = ginfo.get("now")
-                            active_group = gname
-                            break
-                    if active_node:
-                        break
-                if not active_node and "GLOBAL" in selector_groups:
+                if clash_mode == "global" and "GLOBAL" in selector_groups:
                     active_node = selector_groups["GLOBAL"].get("now")
                     active_group = "GLOBAL"
+                elif "节点选择" in selector_groups:
+                    active_node = selector_groups["节点选择"].get("now")
+                    active_group = "节点选择"
+                else:
+                    for kw in state.guardian.target_keywords:
+                        for gname, ginfo in selector_groups.items():
+                            if kw in gname:
+                                active_node = ginfo.get("now")
+                                active_group = gname
+                                break
+                        if active_node:
+                            break
 
             state.active_node = active_node or state.active_node
             state.active_group = active_group
+            state.clash_mode = clash_mode
 
             self.send_json({
                 "clash_online": ok,
                 "clash_version": ver,
+                "clash_mode": state.clash_mode,
                 "active_node": state.active_node,
                 "active_group": state.active_group,
                 "active_delay": state.active_delay,

@@ -101,10 +101,12 @@ async function fetchStatus() {
     }
 
     if (data.active_node) {
+      const prevActiveNode = activeNode;
       activeNode = data.active_node;
-      activeNodeName.innerText = activeNode;
+      activeNodeName.innerText = cleanDisplayName(activeNode);
       activeNodeFlag.innerText = extractFlag(activeNode);
-      activeNodeGroup.innerText = `策略组: ${data.active_group || '节点选择'}`;
+      const modeLabel = (data.clash_mode === 'global') ? '全局模式' : '规则模式';
+      activeNodeGroup.innerText = `策略组: ${data.active_group || 'GLOBAL'} (${modeLabel})`;
 
       if (data.active_delay !== undefined && data.active_delay < 9999) {
         activeNodeDelay.className = 'badge badge-success';
@@ -123,6 +125,10 @@ async function fetchStatus() {
       } else {
         activeNodeStatus.className = 'badge badge-danger';
         activeNodeStatus.innerText = '🔴 连接异常';
+      }
+
+      if (prevActiveNode !== activeNode) {
+        renderNodes();
       }
     }
 
