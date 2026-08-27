@@ -3,9 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>Clash Mi - Gemini 智能守护仪表盘</title>
   <link rel="icon" type="image/x-icon" href="favicon.ico">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=1.0.2">
 </head>
 <body>
   <div class="app-container">
@@ -27,7 +30,21 @@
       </div>
     </header>
 
-    <!-- 顶部核心状态看板 -->
+    <!-- 1. 实时守护与心跳日志面板 (最顶层置顶展示) -->
+    <section class="log-section card">
+      <div class="log-header" id="logHeader">
+        <div class="log-title">
+          <span>📜 实时守护与心跳日志</span>
+          <span class="log-live-dot"></span>
+        </div>
+        <button id="clearLogBtn" class="btn-text-sm">清空日志</button>
+      </div>
+      <div class="log-console" id="logConsole">
+        <div class="log-entry log-info">[系统就绪] Clash Mi Gemini 智能守护前端已启动。</div>
+      </div>
+    </section>
+
+    <!-- 2. 核心状态看板 -->
     <section class="overview-section">
       <!-- 当前使用节点卡片 -->
       <div class="card hero-card">
@@ -71,21 +88,7 @@
       </div>
     </section>
 
-    <!-- 实时心跳与活动日志面板 (置顶展示) -->
-    <section class="log-section card">
-      <div class="log-header" id="logHeader">
-        <div class="log-title">
-          <span>📜 实时守护与心跳日志</span>
-          <span class="log-live-dot"></span>
-        </div>
-        <button id="clearLogBtn" class="btn-text-sm">清空日志</button>
-      </div>
-      <div class="log-console" id="logConsole">
-        <div class="log-entry log-info">[系统就绪] Clash Mi Gemini 智能守护前端已启动。</div>
-      </div>
-    </section>
-
-    <!-- 过滤与搜索工具栏 -->
+    <!-- 3. 过滤与搜索工具栏 -->
     <section class="filter-toolbar">
       <div class="region-tabs" id="regionTabs">
         <button class="tab-btn active" data-region="ALL">全部 (<span id="countAll">0</span>)</button>
@@ -106,7 +109,7 @@
       </div>
     </section>
 
-    <!-- 节点列表卡片网格 -->
+    <!-- 4. 节点列表卡片网格 -->
     <section class="nodes-grid-section">
       <div class="section-header">
         <h2 class="section-title">节点健康列表</h2>
@@ -124,6 +127,6 @@
   <!-- Toast 桌面提示框容器 -->
   <div id="toastContainer" class="toast-container"></div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=1.0.2"></script>
 </body>
 </html>
