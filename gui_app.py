@@ -108,9 +108,22 @@ class GuardianAPIHandler(SimpleHTTPRequestHandler):
         self.send_response(code)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(body)
+
+    def is_trusted_local_origin(self):
+        """Allow command-line clients, but reject browser writes from other sites."""
+        origin = self.headers.get('Origin')
+        if not origin:
+            return True
+        return origin in {
+            f"http://127.0.0.1:{PORT}",
+            f"http://localhost:{PORT}",
+        }
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
 
     def do_GET(self):
         parsed = parse.urlparse(self.path)
@@ -182,6 +195,9 @@ class GuardianAPIHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         parsed = parse.urlparse(self.path)
         path = parsed.path
+        if not self.is_trusted_local_origin():
+            self.send_json({"ok": False, "msg": "不允许跨站请求"}, code=403)
+            return
         length = int(self.headers.get('Content-Length', 0))
         body_data = {}
         if length > 0:
@@ -338,8 +354,13 @@ def open_ui_window():
     for p in edge_paths + chrome_paths:
         if os.path.exists(p):
             try:
-                cmd = f'"{p}" --app={url} --user-data-dir="{USER_DATA_DIR}" --window-size=1180,820 --window-position=200,100'
-                subprocess.Popen(cmd, shell=True)
+                subprocess.Popen([
+                    p,
+                    f"--app={url}",
+                    f"--user-data-dir={USER_DATA_DIR}",
+                    "--window-size=1180,820",
+                    "--window-position=200,100",
+                ])
                 return
             except Exception:
                 pass

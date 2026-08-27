@@ -51,6 +51,16 @@ function cleanDisplayName(name) {
   return name.replace(/^[\uD83C-\uDBFF\uDC00-\uDFFF\s]+/g, '').trim() || name;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[char]);
+}
+
 function classifyRegion(name) {
   const lower = name.toLowerCase();
   if (name.includes('🇹🇼') || lower.includes('taiwan') || lower.includes('tw') || lower.includes('台湾')) return 'TW';
@@ -216,18 +226,22 @@ function renderNodes() {
     return;
   }
 
-  nodesGrid.innerHTML = filtered.map((node, index) => {
+  nodesGrid.innerHTML = filtered.map(node => {
     const isActive = (node.name === activeNode);
-    const flag = extractFlag(node.name);
+    const flag = escapeHtml(extractFlag(node.name));
+    const name = escapeHtml(node.name);
+    const displayName = escapeHtml(cleanDisplayName(node.name));
+    const desc = escapeHtml(node.desc || '实测完成');
+    const encodedName = escapeHtml(encodeURIComponent(node.name));
     let statusBadgeHtml = '';
     let delayBadgeHtml = '';
 
     if (node.status === 'OK') {
       statusBadgeHtml = '<span class="badge badge-success">🟢 完美支持</span>';
-      delayBadgeHtml = `<span class="badge badge-info">${node.delay} ms</span>`;
+      delayBadgeHtml = `<span class="badge badge-info">${escapeHtml(node.delay)} ms</span>`;
     } else if (node.status === 'RESTRICTED') {
       statusBadgeHtml = '<span class="badge badge-warning">🟡 地区受限</span>';
-      delayBadgeHtml = `<span class="badge badge-warning">${node.delay} ms</span>`;
+      delayBadgeHtml = `<span class="badge badge-warning">${escapeHtml(node.delay)} ms</span>`;
     } else {
       statusBadgeHtml = '<span class="badge badge-danger">🔴 异常/超时</span>';
       delayBadgeHtml = '<span class="badge badge-danger">--</span>';
@@ -238,23 +252,27 @@ function renderNodes() {
         <div class="node-card-top">
           <div class="node-card-flag">${flag}</div>
           <div class="node-card-info">
-            <div class="node-card-name" title="${node.name}">${cleanDisplayName(node.name)}</div>
+            <div class="node-card-name" title="${name}">${displayName}</div>
             <div class="node-card-tags">
               ${statusBadgeHtml}
               ${delayBadgeHtml}
             </div>
           </div>
         </div>
-        <div class="node-card-desc">${node.desc || '实测完成'}</div>
+        <div class="node-card-desc">${desc}</div>
         <div class="node-card-actions">
           ${isActive 
             ? '<span class="active-pill-tag">✓ 当前使用中</span>' 
-            : `<button class="switch-node-btn" onclick="switchTargetNode('${encodeURIComponent(node.name)}')">切换至此节点</button>`
+            : `<button class="switch-node-btn" data-node-name="${encodedName}">切换至此节点</button>`
           }
         </div>
       </div>
     `;
   }).join('');
+
+  nodesGrid.querySelectorAll('.switch-node-btn').forEach(button => {
+    button.addEventListener('click', () => switchTargetNode(button.dataset.nodeName));
+  });
 }
 
 // 切换到目标节点

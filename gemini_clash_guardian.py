@@ -29,6 +29,7 @@ import argparse
 import subprocess
 import threading
 import shutil
+import tempfile
 from urllib import request, parse, error
 from concurrent.futures import ThreadPoolExecutor
 
@@ -374,7 +375,9 @@ class ClashMiGuardian:
                 pass
 
         runtime_yaml = os.path.join(base, "service_core_runtime_profile.yaml")
-        if os.path.exists(runtime_yaml):
+        # Prefer the selected profile. The runtime copy is only a fallback,
+        # otherwise the application may modify two divergent configurations.
+        if not paths and os.path.exists(runtime_yaml):
             paths.append(runtime_yaml)
 
         return list(dict.fromkeys(paths))
@@ -406,8 +409,11 @@ class ClashMiGuardian:
         paths = self.get_candidate_profile_paths()
         if not paths:
             return False, "未找到 Clash Mi 配置文件"
+        if not isinstance(target_group, str) or not target_group.strip() or any(c in target_group for c in ",#\r\n"):
+            return False, "策略组名称不能包含逗号、井号或换行符"
 
         success_count = 0
+        errors = []
         injected_lines = [
             f"{self.RULE_TAG_START}\n",
             f"- DOMAIN-SUFFIX,generativelanguage.googleapis.com,{target_group}\n",
@@ -437,22 +443,20 @@ class ClashMiGuardian:
                         rules_idx = i
                         break
 
-                if rules_idx != -1:
-                    new_lines = lines[:rules_idx+1] + injected_lines + lines[rules_idx+1:]
-                else:
-                    new_lines = lines + ["\nrules:\n"] + injected_lines
+                if rules_idx == -1:
+                    raise ValueError("配置中未找到 rules: 段，已取消写入以避免生成无效配置")
 
-                with open(yaml_path, 'w', encoding='utf-8') as f:
-                    f.writelines(new_lines)
+                new_lines = lines[:rules_idx+1] + injected_lines + lines[rules_idx+1:]
+                self._atomic_write_text(yaml_path, "".join(new_lines))
                 success_count += 1
-            except Exception:
-                pass
+            except Exception as e:
+                errors.append(f"{os.path.basename(yaml_path)}: {e}")
 
         if success_count > 0:
             self._api_request("/configs?force=true", method="PUT", body={})
             self.flush_connections()
             return True, f"已成功向 {success_count} 个配置文件无损注入 Gemini 专属防漏规则并生效！"
-        return False, "写入配置文件失败"
+        return False, "写入配置文件失败: " + "; ".join(errors)
 
     def restore_gemini_rules(self):
         paths = self.get_candidate_profile_paths()
@@ -460,6 +464,7 @@ class ClashMiGuardian:
             return False, "未找到 Clash Mi 配置文件"
 
         success_count = 0
+        errors = []
         for yaml_path in paths:
             try:
                 with open(yaml_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -468,17 +473,37 @@ class ClashMiGuardian:
                 if self.RULE_TAG_START in content:
                     pattern = re.compile(rf"{re.escape(self.RULE_TAG_START)}.*?{re.escape(self.RULE_TAG_END)}\n?", re.DOTALL)
                     cleaned = pattern.sub("", content)
-                    with open(yaml_path, 'w', encoding='utf-8') as f:
-                        f.write(cleaned)
+                    self._atomic_write_text(yaml_path, cleaned)
                     success_count += 1
-            except Exception:
-                pass
+            except Exception as e:
+                errors.append(f"{os.path.basename(yaml_path)}: {e}")
 
         if success_count > 0:
             self._api_request("/configs?force=true", method="PUT", body={})
             self.flush_connections()
             return True, "已成功移除 Gemini 专属规则并恢复原状！"
+        if errors:
+            return False, "读取或还原配置文件失败: " + "; ".join(errors)
         return True, "未检测到已注入的规则，无需还原"
+
+    @staticmethod
+    def _atomic_write_text(path, content):
+        """Write beside the profile and replace it only after a complete flush."""
+        directory = os.path.dirname(path)
+        fd, temp_path = tempfile.mkstemp(prefix=".gemini_guardian_", suffix=".tmp", dir=directory)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='') as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            shutil.copymode(path, temp_path)
+            os.replace(temp_path, path)
+        except Exception:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
 
     def print_dashboard(self, results, selector_groups, selected_best=None):
         print("\n" + "=" * 84)
