@@ -4,14 +4,18 @@
 Clash Mi 智能节点体检与自动优选守护工具 (Gemini / Antigravity 专用)
 ------------------------------------------------------------------
 原理与机制：
-1. 真实网络探测：绝非只看节点名称！对列表中的每个节点（美国、韩国、日本、新加坡等），
-   程序都会通过 Clash 核心向 Google Gemini 官方服务器 (generativelanguage.googleapis.com)
-   发起真实的 TCP/TLS 握手与 HTTP 请求，精确测量端到端网络延迟与连通状态。
-2. 异常与阻断识别：任何节点如果出现服务器故障、IP 被 Google 封锁或丢包超时（如 503/504），
-   均会被精准标记为 🔴 异常/不可用 并彻底排除。
-3. 政策合规双重保障：针对部分物理连通但由于 Google 官方政策限制导致无法使用的区域（如香港），
-   自动标记为 🟡 地区受限 并降权，避免选入。
-4. 毫秒级自动切换与 Windows 桌面通知。
+1. 真实端到端双端点探测（绝非仅看节点名字！）：
+   对列表中的每个节点（无论名称是美国、韩国、日本、新加坡还是台湾），
+   程序都会通过 Clash 核心向：
+     (1) Google Gemini 官方前端服务 (https://gemini.google.com)
+     (2) Google Gemini API 官方通道 (https://generativelanguage.googleapis.com)
+   同时发起真实的 TCP/TLS 握手与 HTTP 请求，深度校验连通性、IP 风控状态与端到端延迟。
+2. 异常与阻断深度识别：
+   - 节点假死/超时/503/504：直接标红 🔴 故障不可用。
+   - IP 被 Google Gemini 风控/地区拦截（访问 gemini 失败）：直接标红 🔴 Gemini不可用。
+   - 延迟严重超标 (>1200ms) 容易引起流式断流：标记为 🟡 延迟过高/不稳定。
+3. 政策合规双重保障：
+   针对明确受限的地区（如香港），双重降权保护，杜绝 400 报错。
 """
 
 import os
@@ -125,12 +129,10 @@ class ClashMiGuardian:
         self.config = self.load_config(config_path)
         self.api_url = self.config.get("clash_api_url", "http://127.0.0.1:9090").rstrip('/')
         self.secret = self.resolve_secret()
-        self.test_urls = self.config.get("gemini_test_urls", [
-            "https://generativelanguage.googleapis.com",
-            "https://alkalimakersuite-pa.googleapis.com"
-        ])
+        self.gemini_web_url = "https://gemini.google.com"
+        self.gemini_api_url = "https://generativelanguage.googleapis.com"
         self.timeout_sec = self.config.get("timeout_seconds", 5)
-        self.max_workers = self.config.get("max_workers", 12)
+        self.max_workers = self.config.get("max_workers", 16)
         self.target_keywords = self.config.get("target_group_keywords", ["节点选择", "PROXY", "GLOBAL"])
         self.ignore_keywords = [
             '剩余', '到期', '官网', '重置', '通知', '公告', 'DIRECT', 'REJECT', 
@@ -147,12 +149,10 @@ class ClashMiGuardian:
         return {}
 
     def resolve_secret(self):
-        # 1. 优先使用配置中的 Secret
         cfg_secret = self.config.get("clash_api_secret", "auto")
         if cfg_secret and cfg_secret != "auto":
             return cfg_secret
 
-        # 2. 自动从 Clash Mi 的 service.json 读取
         possible_paths = [
             os.path.expandvars(r"%APPDATA%\clashmi\clashmi\service.json"),
             os.path.expandvars(r"%LOCALAPPDATA%\clashmi\clashmi\service.json"),
@@ -230,11 +230,11 @@ class ClashMiGuardian:
         """识别被 Google Gemini 严格政策限制的地区（如中国香港、中国大陆等）"""
         name_lower = node_name.lower()
         if '🇭🇰' in node_name or 'hong kong' in name_lower or 'hongkong' in name_lower or 'hk' in name_lower:
-            return True, "香港节点 (Gemini 官方政策限制地区)"
+            return True, "香港节点 (Google 政策受限地区)"
         if '🇨🇳' in node_name or 'china' in name_lower:
-            return True, "中国大陆 (Gemini 限制地区)"
+            return True, "中国大陆 (Google 受限地区)"
         if '🇷🇺' in node_name or 'russia' in name_lower:
-            return True, "俄罗斯 (Gemini 限制地区)"
+            return True, "俄罗斯 (Google 受限地区)"
         return False, "合规地区"
 
     def probe_single_endpoint(self, node_name, test_url):
@@ -247,24 +247,28 @@ class ClashMiGuardian:
         return False, str(res)
 
     def probe_node(self, node_name):
-        """对单个节点进行全方位的真实网络连通性深度体检"""
+        """
+        对单个节点进行全方位的真实端到端网络连通性深度体检
+        采用双端点综合校验机制：
+        1. 必须能连通 Google Gemini 官方服务 (gemini.google.com)
+        2. 必须能连通 Google Gemini API 通道 (generativelanguage.googleapis.com)
+        """
         restricted, r_reason = self.is_region_restricted(node_name)
         
-        # 1. 真实探测端点 1: Gemini 主 API (generativelanguage.googleapis.com)
-        main_url = self.test_urls[0]
-        ok_main, res_main = self.probe_single_endpoint(node_name, main_url)
+        # 1. 真实网络探测端点 1: Gemini Web 服务 (强制检验 IP 连通性与服务可用性)
+        ok_web, res_web = self.probe_single_endpoint(node_name, self.gemini_web_url)
+        # 2. 真实网络探测端点 2: Gemini API 通道 (检验 API 路由质量)
+        ok_api, res_api = self.probe_single_endpoint(node_name, self.gemini_api_url)
 
-        if not ok_main:
-            err_msg = str(res_main)
-            if "Timeout" in err_msg or "504" in err_msg:
-                desc = "Gemini 连接超时 (504)"
-            elif "503" in err_msg:
-                desc = "节点服务不可用 (503)"
-            elif "refused" in err_msg.lower():
-                desc = "代理拒绝连接"
-            else:
-                desc = f"网络异常: {err_msg[:16]}"
-                
+        # 只要任一核心端点完全无法连接，说明该节点不可用于 Gemini / Antigravity
+        if not ok_web or not ok_api:
+            err_details = []
+            if not ok_web:
+                err_details.append(f"GeminiWeb异常")
+            if not ok_api:
+                err_details.append(f"API通道异常")
+            
+            desc = " / ".join(err_details)
             return {
                 "name": node_name,
                 "delay": 99999,
@@ -274,31 +278,45 @@ class ClashMiGuardian:
                 "score": 99999
             }
 
-        delay = res_main
+        # 获取真实有效延迟（以两者综合延迟为准）
+        web_delay = res_web
+        api_delay = res_api
+        effective_delay = max(web_delay, api_delay)
 
-        # 2. 如果节点属于政策受限区域（如香港），予以标记并降权
+        # 3. 政策受限地区（如香港）：虽然物理可能连通，但 Google 严格返回 400 不支持，必须降权
         if restricted:
             return {
                 "name": node_name,
-                "delay": delay,
+                "delay": effective_delay,
                 "status": "RESTRICTED",
                 "status_text": "地区受限",
                 "desc": r_reason,
-                "score": delay + 10000
+                "score": effective_delay + 10000
             }
 
-        # 3. 正常可用且合规节点
+        # 4. 延迟过高 / 极度不稳定节点 (>1200ms)：极易在 AI 长对话流式通信中发生 504 断流
+        if effective_delay > 1200:
+            return {
+                "name": node_name,
+                "delay": effective_delay,
+                "status": "RESTRICTED",
+                "status_text": "高延迟/不稳定",
+                "desc": f"实测延迟高达 {effective_delay}ms (易断流)",
+                "score": effective_delay + 5000
+            }
+
+        # 5. 双端点完全正常、低延迟合规节点
         return {
             "name": node_name,
-            "delay": delay,
+            "delay": effective_delay,
             "status": "OK",
             "status_text": "Gemini 正常",
-            "desc": "实测连通/无限制",
-            "score": delay
+            "desc": f"双端点畅通 (API:{api_delay}ms / Web:{web_delay}ms)",
+            "score": effective_delay
         }
 
     def benchmark_all_nodes(self, real_nodes):
-        print(cstr(f"[*] 正在通过 Clash 内核对全部 {len(real_nodes)} 个节点向 Google Gemini 进行实地握手检测...", Colors.CYAN))
+        print(cstr(f"[*] 正在通过 Clash 内核对全部 {len(real_nodes)} 个节点向 Google Gemini 进行实地双端点深度检测...", Colors.CYAN))
         results = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             futures = [pool.submit(self.probe_node, node) for node in real_nodes]
@@ -314,19 +332,19 @@ class ClashMiGuardian:
         return ok, res
 
     def print_dashboard(self, results, selector_groups, selected_best=None):
-        print("\n" + "=" * 78)
-        title = " 🚀 Clash Mi 智能节点体检仪表盘 (Antigravity & Gemini 真实实测) "
-        print(cstr(title.center(70), Colors.BOLD + Colors.CYAN))
-        print("=" * 78)
+        print("\n" + "=" * 82)
+        title = " 🚀 Clash Mi 智能节点体检仪表盘 (Antigravity & Gemini 双端点深度实测) "
+        print(cstr(title.center(74), Colors.BOLD + Colors.CYAN))
+        print("=" * 82)
 
         # 表头
         h_idx = pad_str("#", 4, 'center')
-        h_name = pad_str("节点名称", 32, 'left')
+        h_name = pad_str("节点名称", 30, 'left')
         h_delay = pad_str("实测延迟", 12, 'center')
         h_status = pad_str("Gemini 状态", 14, 'center')
-        h_remark = pad_str("真实网络诊断说明", 16, 'left')
+        h_remark = pad_str("真实网络诊断说明", 20, 'left')
         print(cstr(f"{h_idx} | {h_name} | {h_delay} | {h_status} | {h_remark}", Colors.BOLD))
-        print("-" * 78)
+        print("-" * 82)
 
         ok_count = 0
         rest_count = 0
@@ -339,19 +357,19 @@ class ClashMiGuardian:
             desc = item["desc"]
 
             display_name = name
-            if str_width(display_name) > 30:
-                while str_width(display_name) > 27:
+            if str_width(display_name) > 28:
+                while str_width(display_name) > 25:
                     display_name = display_name[:-1]
                 display_name += "..."
 
             col_idx = pad_str(str(idx), 4, 'center')
-            col_name = pad_str(display_name, 32, 'left')
+            col_name = pad_str(display_name, 30, 'left')
 
             if status == "OK":
                 ok_count += 1
                 col_delay = pad_str(f"{delay} ms", 12, 'center')
                 col_status = pad_str("🟢 完美支持", 14, 'center')
-                col_remark = pad_str(desc, 16, 'left')
+                col_remark = pad_str(desc, 20, 'left')
                 line = f"{col_idx} | {col_name} | {col_delay} | {col_status} | {col_remark}"
                 if idx == 1:
                     print(cstr(line, Colors.BOLD + Colors.GREEN))
@@ -360,20 +378,20 @@ class ClashMiGuardian:
             elif status == "RESTRICTED":
                 rest_count += 1
                 col_delay = pad_str(f"{delay} ms", 12, 'center')
-                col_status = pad_str("🟡 地区受限", 14, 'center')
-                col_remark = pad_str(desc, 16, 'left')
+                col_status = pad_str("🟡 地区/受限", 14, 'center')
+                col_remark = pad_str(desc, 20, 'left')
                 print(cstr(f"{col_idx} | {col_name} | {col_delay} | {col_status} | {col_remark}", Colors.YELLOW))
             else:
                 fail_count += 1
                 col_delay = pad_str("--", 12, 'center')
-                col_status = pad_str("🔴 异常/超时", 14, 'center')
-                col_remark = pad_str(desc, 16, 'left')
+                col_status = pad_str("🔴 异常/不可用", 14, 'center')
+                col_remark = pad_str(desc, 20, 'left')
                 print(cstr(f"{col_idx} | {col_name} | {col_delay} | {col_status} | {col_remark}", Colors.RED))
 
-        print("-" * 78)
-        summary = f"统计：总计 {len(results)} 节点 | 🟢 实测可用: {ok_count} | 🟡 地区受限: {rest_count} | 🔴 实际故障/超时: {fail_count}"
+        print("-" * 82)
+        summary = f"统计：总计 {len(results)} 节点 | 🟢 双端畅通可用: {ok_count} | 🟡 地区受限/高延迟: {rest_count} | 🔴 实际故障/超时: {fail_count}"
         print(cstr(summary, Colors.BOLD))
-        print("=" * 78 + "\n")
+        print("=" * 82 + "\n")
 
     def run_optimization(self, auto_switch=True, send_notify=True):
         ok, msg = self.test_connection()
@@ -403,7 +421,7 @@ class ClashMiGuardian:
                 show_windows_toast("Clash Mi 节点体检告警", "未能找到支持 Gemini 的可用节点，请检查节点订阅！")
             return None
 
-        print(cstr(f"[✓] 推荐最优 Gemini 节点: 【{best_node['name']}】 (实测延迟: {best_node['delay']}ms)", Colors.BOLD + Colors.GREEN))
+        print(cstr(f"[✓] 推荐最优 Gemini 节点: 【{best_node['name']}】 (实测双端延迟: {best_node['delay']}ms)", Colors.BOLD + Colors.GREEN))
 
         if auto_switch:
             switched_groups = []
@@ -422,7 +440,7 @@ class ClashMiGuardian:
 
             if switched_groups and send_notify:
                 notify_title = "Clash Mi 节点智能优选"
-                notify_msg = f"已自动切换到最优节点: {best_node['name']}\nGemini 实测延迟: {best_node['delay']}ms (网络健康)"
+                notify_msg = f"已自动切换到最优节点: {best_node['name']}\nGemini 双端实测延迟: {best_node['delay']}ms (网络健康)"
                 show_windows_toast(notify_title, notify_msg)
 
         return best_node
