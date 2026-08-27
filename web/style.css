@@ -229,7 +229,7 @@ body {
 /* 顶部概览区域 */
 .overview-section {
   display: grid;
-  grid-template-columns: 1.2fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 20px;
 }
 
@@ -396,6 +396,18 @@ input:checked + .slider:before {
 
 .btn-secondary:hover {
   background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px);
+}
+
+.btn-success-outline {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.btn-success-outline:hover {
+  background: rgba(16, 185, 129, 0.25);
+  border-color: #34d399;
   transform: translateY(-2px);
 }
 

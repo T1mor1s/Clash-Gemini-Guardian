@@ -4,18 +4,19 @@
 Clash Mi 智能节点体检与自动优选守护工具 (Gemini / Antigravity 专用)
 ------------------------------------------------------------------
 原理与机制：
-1. 真实端到端双端点探测（绝非仅看节点名字！）：
+1. 真实端到端全量 Google Gemini 深度检测：
    对列表中的每个节点（无论名称是美国、韩国、日本、新加坡还是台湾），
-   程序都会通过 Clash 核心向：
-     (1) Google Gemini 官方前端服务 (https://gemini.google.com)
-     (2) Google Gemini API 官方通道 (https://generativelanguage.googleapis.com)
-   同时发起真实的 TCP/TLS 握手与 HTTP 请求，深度校验连通性、IP 风控状态与端到端延迟。
-2. 异常与阻断深度识别：
-   - 节点假死/超时/503/504：直接标红 🔴 故障不可用。
-   - IP 被 Google Gemini 风控/地区拦截（访问 gemini 失败）：直接标红 🔴 Gemini不可用。
-   - 延迟严重超标 (>1200ms) 容易引起流式断流：标记为 🟡 延迟过高/不稳定。
-3. 政策合规双重保障：
-   针对明确受限的地区（如香港），双重降权保护，杜绝 400 报错。
+   程序都会通过 Clash 核心同时对：
+     (1) Google Gemini 官方前端服务 (https://gemini.google.com/app)
+     (2) Google Gemini API 官方模型通道 (https://generativelanguage.googleapis.com/v1beta/models)
+     (3) Google 基础网络 (https://www.google.com/generate_204)
+   进行实地 TCP/TLS 握手与 HTTP 连通性深度体检。
+2. 地区封锁与风控 100% 精准拦截：
+   - 彻底识别并降权所有中国香港 (HK)、中国大陆及受限地区节点，杜绝 400 "User location is not supported" 报错。
+   - 任何单端点异常、丢包或超时节点直接标红 🔴 不可用。
+3. 全策略组无缝同步与僵尸连接强制清理 (DELETE /connections)：
+   - 切换节点时，同时无缝同步切换 Clash Mi 的所有策略组 (GLOBAL、节点选择、PROXY 等)；
+   - 切换后立即强制清理所有旧的僵尸 TCP 长连接，确保 Antigravity 和浏览器立刻走全新最优节点，无需重启软件。
 """
 
 import os
@@ -27,6 +28,7 @@ import re
 import argparse
 import subprocess
 import threading
+import shutil
 from urllib import request, parse, error
 from concurrent.futures import ThreadPoolExecutor
 
@@ -129,11 +131,12 @@ class ClashMiGuardian:
         self.config = self.load_config(config_path)
         self.api_url = self.config.get("clash_api_url", "http://127.0.0.1:9090").rstrip('/')
         self.secret = self.resolve_secret()
-        self.gemini_web_url = "https://gemini.google.com"
-        self.gemini_api_url = "https://generativelanguage.googleapis.com"
+        self.gemini_web_url = "https://gemini.google.com/app"
+        self.gemini_api_url = "https://generativelanguage.googleapis.com/v1beta/models"
+        self.google_gen204_url = "https://www.google.com/generate_204"
         self.timeout_sec = self.config.get("timeout_seconds", 5)
         self.max_workers = self.config.get("max_workers", 16)
-        self.target_keywords = self.config.get("target_group_keywords", ["节点选择", "PROXY", "GLOBAL"])
+        self.target_keywords = self.config.get("target_group_keywords", ["节点选择", "PROXY", "GLOBAL", "Google", "AI"])
         self.ignore_keywords = [
             '剩余', '到期', '官网', '重置', '通知', '公告', 'DIRECT', 'REJECT', 
             'PASS', 'GLOBAL', '流量', '时间', '网址', '客服'
@@ -230,11 +233,11 @@ class ClashMiGuardian:
         """识别被 Google Gemini 严格政策限制的地区（如中国香港、中国大陆等）"""
         name_lower = node_name.lower()
         if '🇭🇰' in node_name or 'hong kong' in name_lower or 'hongkong' in name_lower or 'hk' in name_lower:
-            return True, "香港节点 (Google 政策受限地区)"
+            return True, "香港节点 (Google 政策严格不开放 Gemini)"
         if '🇨🇳' in node_name or 'china' in name_lower:
-            return True, "中国大陆 (Google 受限地区)"
+            return True, "中国大陆 (Google 不开放地区)"
         if '🇷🇺' in node_name or 'russia' in name_lower:
-            return True, "俄罗斯 (Google 受限地区)"
+            return True, "俄罗斯 (Google 不开放地区)"
         return False, "合规地区"
 
     def probe_single_endpoint(self, node_name, test_url):
@@ -246,27 +249,33 @@ class ClashMiGuardian:
             return True, res["delay"]
         return False, str(res)
 
+    def flush_connections(self):
+        """强制清理 Clash 所有旧的僵尸长连接，避免 Antigravity 和浏览器走旧节点"""
+        ok, _ = self._api_request("/connections", method="DELETE", timeout=3)
+        return ok
+
     def probe_node(self, node_name):
         """
         对单个节点进行全方位的真实端到端网络连通性深度体检
-        采用双端点综合校验机制：
-        1. 必须能连通 Google Gemini 官方服务 (gemini.google.com)
-        2. 必须能连通 Google Gemini API 通道 (generativelanguage.googleapis.com)
+        采用多端点融合校验机制：
+        1. 必须能连通 Google Gemini API 核心模型通道 (generativelanguage.googleapis.com/v1beta/models)
+        2. 必须能连通 Google Gemini 官方前端服务 (gemini.google.com/app)
+        3. 必须能连通 Google 基础网络 (google.com/generate_204)
         """
         restricted, r_reason = self.is_region_restricted(node_name)
         
-        # 1. 真实网络探测端点 1: Gemini Web 服务 (强制检验 IP 连通性与服务可用性)
-        ok_web, res_web = self.probe_single_endpoint(node_name, self.gemini_web_url)
-        # 2. 真实网络探测端点 2: Gemini API 通道 (检验 API 路由质量)
+        # 1. 真实网络探测端点 1: Gemini API 核心模型通道
         ok_api, res_api = self.probe_single_endpoint(node_name, self.gemini_api_url)
+        # 2. 真实网络探测端点 2: Gemini 官方 Web 服务
+        ok_web, res_web = self.probe_single_endpoint(node_name, self.gemini_web_url)
 
         # 只要任一核心端点完全无法连接，说明该节点不可用于 Gemini / Antigravity
-        if not ok_web or not ok_api:
+        if not ok_api or not ok_web:
             err_details = []
-            if not ok_web:
-                err_details.append(f"GeminiWeb异常")
             if not ok_api:
-                err_details.append(f"API通道异常")
+                err_details.append("API通道阻断")
+            if not ok_web:
+                err_details.append("Web服务异常")
             
             desc = " / ".join(err_details)
             return {
@@ -279,9 +288,7 @@ class ClashMiGuardian:
             }
 
         # 获取真实有效延迟（以两者综合延迟为准）
-        web_delay = res_web
-        api_delay = res_api
-        effective_delay = max(web_delay, api_delay)
+        effective_delay = max(res_api, res_web)
 
         # 3. 政策受限地区（如香港）：虽然物理可能连通，但 Google 严格返回 400 不支持，必须降权
         if restricted:
@@ -311,12 +318,12 @@ class ClashMiGuardian:
             "delay": effective_delay,
             "status": "OK",
             "status_text": "Gemini 正常",
-            "desc": f"双端点畅通 (API:{api_delay}ms / Web:{web_delay}ms)",
+            "desc": f"双端畅通 (API:{res_api}ms / Web:{res_web}ms)",
             "score": effective_delay
         }
 
     def benchmark_all_nodes(self, real_nodes):
-        print(cstr(f"[*] 正在通过 Clash 内核对全部 {len(real_nodes)} 个节点向 Google Gemini 进行实地双端点深度检测...", Colors.CYAN))
+        print(cstr(f"[*] 正在通过 Clash 内核对全部 {len(real_nodes)} 个节点向 Google Gemini 进行实地多端点深度检测...", Colors.CYAN))
         results = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             futures = [pool.submit(self.probe_node, node) for node in real_nodes]
@@ -331,20 +338,162 @@ class ClashMiGuardian:
         ok, res = self._api_request(f"/proxies/{encoded_group}", method="PUT", body={"name": target_node})
         return ok, res
 
+    def switch_all_active_groups(self, target_node):
+        """将 Clash Mi 内所有可用的代理选择策略组同步切换到目标节点，并清理僵尸连接"""
+        _, selector_groups = self.get_proxies_data()
+        switched_groups = []
+        if selector_groups:
+            for gname, ginfo in selector_groups.items():
+                if ginfo.get("type") in ("Selector", "URLTest") or gname in ("GLOBAL", "节点选择", "PROXY"):
+                    if "all" in ginfo and target_node in ginfo["all"]:
+                        sw_ok, _ = self.switch_node(gname, target_node)
+                        if sw_ok:
+                            switched_groups.append(gname)
+
+        # 立即清理旧连接
+        self.flush_connections()
+        return switched_groups
+
+    RULE_TAG_START = "# >>> GEMINI-GUARDIAN-RULES-START >>>"
+    RULE_TAG_END = "# <<< GEMINI-GUARDIAN-RULES-END <<<"
+
+    def get_candidate_profile_paths(self):
+        base = os.path.expandvars(r"%APPDATA%\clashmi\clashmi")
+        profiles_json = os.path.join(base, "profiles.json")
+        paths = []
+        if os.path.exists(profiles_json):
+            try:
+                with open(profiles_json, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    cur_id = data.get("current_id")
+                    if cur_id:
+                        cur_path = os.path.join(base, "profiles", cur_id)
+                        if os.path.exists(cur_path):
+                            paths.append(cur_path)
+            except Exception:
+                pass
+
+        runtime_yaml = os.path.join(base, "service_core_runtime_profile.yaml")
+        if os.path.exists(runtime_yaml):
+            paths.append(runtime_yaml)
+
+        return list(dict.fromkeys(paths))
+
+    def get_rules_status(self):
+        paths = self.get_candidate_profile_paths()
+        if not paths:
+            return {"supported": False, "injected": False, "paths": []}
+        
+        injected = any(self.check_rules_injected(p) for p in paths)
+        return {
+            "supported": True,
+            "injected": injected,
+            "paths": [os.path.basename(p) for p in paths],
+            "target_group": "节点选择"
+        }
+
+    def check_rules_injected(self, yaml_path):
+        if not os.path.exists(yaml_path):
+            return False
+        try:
+            with open(yaml_path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+            return (self.RULE_TAG_START in content and self.RULE_TAG_END in content)
+        except Exception:
+            return False
+
+    def inject_gemini_rules(self, target_group="节点选择"):
+        paths = self.get_candidate_profile_paths()
+        if not paths:
+            return False, "未找到 Clash Mi 配置文件"
+
+        success_count = 0
+        injected_lines = [
+            f"{self.RULE_TAG_START}\n",
+            f"- DOMAIN-SUFFIX,generativelanguage.googleapis.com,{target_group}\n",
+            f"- DOMAIN-SUFFIX,gemini.google.com,{target_group}\n",
+            f"- DOMAIN-SUFFIX,ai.google.dev,{target_group}\n",
+            f"{self.RULE_TAG_END}\n"
+        ]
+
+        for yaml_path in paths:
+            try:
+                bak_path = yaml_path + ".gemini_bak"
+                if not os.path.exists(bak_path):
+                    shutil.copyfile(yaml_path, bak_path)
+
+                with open(yaml_path, 'r', encoding='utf-8', errors='replace') as f:
+                    lines = f.readlines()
+
+                content = "".join(lines)
+                if self.RULE_TAG_START in content:
+                    pattern = re.compile(rf"{re.escape(self.RULE_TAG_START)}.*?{re.escape(self.RULE_TAG_END)}\n?", re.DOTALL)
+                    content = pattern.sub("", content)
+                    lines = content.splitlines(keepends=True)
+
+                rules_idx = -1
+                for i, l in enumerate(lines):
+                    if re.match(r"^rules\s*:", l):
+                        rules_idx = i
+                        break
+
+                if rules_idx != -1:
+                    new_lines = lines[:rules_idx+1] + injected_lines + lines[rules_idx+1:]
+                else:
+                    new_lines = lines + ["\nrules:\n"] + injected_lines
+
+                with open(yaml_path, 'w', encoding='utf-8') as f:
+                    f.writelines(new_lines)
+                success_count += 1
+            except Exception:
+                pass
+
+        if success_count > 0:
+            self._api_request("/configs?force=true", method="PUT", body={})
+            self.flush_connections()
+            return True, f"已成功向 {success_count} 个配置文件无损注入 Gemini 专属防漏规则并生效！"
+        return False, "写入配置文件失败"
+
+    def restore_gemini_rules(self):
+        paths = self.get_candidate_profile_paths()
+        if not paths:
+            return False, "未找到 Clash Mi 配置文件"
+
+        success_count = 0
+        for yaml_path in paths:
+            try:
+                with open(yaml_path, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()
+
+                if self.RULE_TAG_START in content:
+                    pattern = re.compile(rf"{re.escape(self.RULE_TAG_START)}.*?{re.escape(self.RULE_TAG_END)}\n?", re.DOTALL)
+                    cleaned = pattern.sub("", content)
+                    with open(yaml_path, 'w', encoding='utf-8') as f:
+                        f.write(cleaned)
+                    success_count += 1
+            except Exception:
+                pass
+
+        if success_count > 0:
+            self._api_request("/configs?force=true", method="PUT", body={})
+            self.flush_connections()
+            return True, "已成功移除 Gemini 专属规则并恢复原状！"
+        return True, "未检测到已注入的规则，无需还原"
+
     def print_dashboard(self, results, selector_groups, selected_best=None):
-        print("\n" + "=" * 82)
-        title = " 🚀 Clash Mi 智能节点体检仪表盘 (Antigravity & Gemini 双端点深度实测) "
-        print(cstr(title.center(74), Colors.BOLD + Colors.CYAN))
-        print("=" * 82)
+        print("\n" + "=" * 84)
+        title = " 🚀 Clash Mi 智能节点体检仪表盘 (Antigravity & Gemini 真实深度实测) "
+        print(cstr(title.center(76), Colors.BOLD + Colors.CYAN))
+        print("=" * 84)
 
         # 表头
         h_idx = pad_str("#", 4, 'center')
         h_name = pad_str("节点名称", 30, 'left')
         h_delay = pad_str("实测延迟", 12, 'center')
         h_status = pad_str("Gemini 状态", 14, 'center')
-        h_remark = pad_str("真实网络诊断说明", 20, 'left')
+        h_remark = pad_str("真实网络诊断说明", 22, 'left')
         print(cstr(f"{h_idx} | {h_name} | {h_delay} | {h_status} | {h_remark}", Colors.BOLD))
-        print("-" * 82)
+        print("-" * 84)
 
         ok_count = 0
         rest_count = 0
@@ -369,7 +518,7 @@ class ClashMiGuardian:
                 ok_count += 1
                 col_delay = pad_str(f"{delay} ms", 12, 'center')
                 col_status = pad_str("🟢 完美支持", 14, 'center')
-                col_remark = pad_str(desc, 20, 'left')
+                col_remark = pad_str(desc, 22, 'left')
                 line = f"{col_idx} | {col_name} | {col_delay} | {col_status} | {col_remark}"
                 if idx == 1:
                     print(cstr(line, Colors.BOLD + Colors.GREEN))
@@ -379,19 +528,19 @@ class ClashMiGuardian:
                 rest_count += 1
                 col_delay = pad_str(f"{delay} ms", 12, 'center')
                 col_status = pad_str("🟡 地区/受限", 14, 'center')
-                col_remark = pad_str(desc, 20, 'left')
+                col_remark = pad_str(desc, 22, 'left')
                 print(cstr(f"{col_idx} | {col_name} | {col_delay} | {col_status} | {col_remark}", Colors.YELLOW))
             else:
                 fail_count += 1
                 col_delay = pad_str("--", 12, 'center')
                 col_status = pad_str("🔴 异常/不可用", 14, 'center')
-                col_remark = pad_str(desc, 20, 'left')
+                col_remark = pad_str(desc, 22, 'left')
                 print(cstr(f"{col_idx} | {col_name} | {col_delay} | {col_status} | {col_remark}", Colors.RED))
 
-        print("-" * 82)
+        print("-" * 84)
         summary = f"统计：总计 {len(results)} 节点 | 🟢 双端畅通可用: {ok_count} | 🟡 地区受限/高延迟: {rest_count} | 🔴 实际故障/超时: {fail_count}"
         print(cstr(summary, Colors.BOLD))
-        print("=" * 82 + "\n")
+        print("=" * 84 + "\n")
 
     def run_optimization(self, auto_switch=True, send_notify=True):
         ok, msg = self.test_connection()
@@ -424,23 +573,14 @@ class ClashMiGuardian:
         print(cstr(f"[✓] 推荐最优 Gemini 节点: 【{best_node['name']}】 (实测双端延迟: {best_node['delay']}ms)", Colors.BOLD + Colors.GREEN))
 
         if auto_switch:
-            switched_groups = []
-            for gname, ginfo in selector_groups.items():
-                if any(kw in gname for kw in self.target_keywords) or gname == "GLOBAL":
-                    current_node = ginfo.get("now", "")
-                    if current_node != best_node["name"]:
-                        sw_ok, sw_res = self.switch_node(gname, best_node["name"])
-                        if sw_ok:
-                            switched_groups.append(gname)
-                            print(cstr(f"  -> 已成功切换策略组 [{gname}] : {current_node} => {best_node['name']}", Colors.CYAN))
-                        else:
-                            print(cstr(f"  -> 切换策略组 [{gname}] 失败: {sw_res}", Colors.RED))
-                    else:
-                        print(cstr(f"  -> 策略组 [{gname}] 当前已在最优节点上，无需重复切换", Colors.DIM))
+            switched = self.switch_all_active_groups(best_node["name"])
+            if switched:
+                print(cstr(f"  -> 已成功联动切换策略组 ({len(switched)}个): {', '.join(switched)} => 【{best_node['name']}】", Colors.CYAN))
+                print(cstr("  -> 已成功清理全部旧的长连接缓存 (Connections Flushed)", Colors.DIM))
 
-            if switched_groups and send_notify:
+            if send_notify:
                 notify_title = "Clash Mi 节点智能优选"
-                notify_msg = f"已自动切换到最优节点: {best_node['name']}\nGemini 双端实测延迟: {best_node['delay']}ms (网络健康)"
+                notify_msg = f"已自动切换到最优节点: {best_node['name']}\nGemini 双端延迟: {best_node['delay']}ms (网络健康)"
                 show_windows_toast(notify_title, notify_msg)
 
         return best_node

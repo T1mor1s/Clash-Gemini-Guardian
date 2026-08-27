@@ -367,11 +367,92 @@ themeToggleBtn.addEventListener('click', () => {
   }
 });
 
+// 分流规则状态管理
+const ruleStatusDesc = document.getElementById('ruleStatusDesc');
+const ruleStatusBadge = document.getElementById('ruleStatusBadge');
+const injectRulesBtn = document.getElementById('injectRulesBtn');
+const restoreRulesBtn = document.getElementById('restoreRulesBtn');
+
+async function fetchRulesStatus() {
+  if (!ruleStatusBadge) return;
+  try {
+    const res = await fetch('/api/rules/status');
+    const data = await res.json();
+    if (data.injected) {
+      ruleStatusBadge.className = 'badge badge-success';
+      ruleStatusBadge.innerText = '🟢 已生效保护';
+      ruleStatusDesc.innerText = `已锁死 Gemini 直连 ${data.target_group || '节点选择'}，永不分流香港`;
+      injectRulesBtn.style.display = 'none';
+      restoreRulesBtn.style.display = 'inline-flex';
+    } else {
+      ruleStatusBadge.className = 'badge badge-neutral';
+      ruleStatusBadge.innerText = '⚪ 未注入';
+      ruleStatusDesc.innerText = '未注入专属规则（可能会受自动分流影响漏跑到香港）';
+      injectRulesBtn.style.display = 'inline-flex';
+      restoreRulesBtn.style.display = 'none';
+    }
+  } catch (err) {
+    ruleStatusBadge.className = 'badge badge-neutral';
+    ruleStatusBadge.innerText = '未连接';
+  }
+}
+
+injectRulesBtn.addEventListener('click', async () => {
+  injectRulesBtn.disabled = true;
+  appendLog('正在向 Clash 配置文件无损写入 Gemini 专属防漏分流规则...', 'info');
+  try {
+    const res = await fetch('/api/rules/inject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_group: '节点选择' })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast('已成功写入防漏规则并生效！', 'success');
+      appendLog('防漏规则注入成功！已将 generativelanguage / gemini 流量永久锁死在优选节点策略组', 'success');
+      await fetchRulesStatus();
+      await fetchStatus();
+    } else {
+      showToast(`规则注入失败: ${data.msg}`, 'error');
+    }
+  } catch (err) {
+    showToast(`注入请求异常: ${err}`, 'error');
+  } finally {
+    injectRulesBtn.disabled = false;
+  }
+});
+
+restoreRulesBtn.addEventListener('click', async () => {
+  restoreRulesBtn.disabled = true;
+  appendLog('正在从 Clash 配置文件中移除 Gemini 专属规则...', 'info');
+  try {
+    const res = await fetch('/api/rules/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast('已成功还原原规则！', 'info');
+      appendLog('已成功还原 Clash 原始规则配置', 'info');
+      await fetchRulesStatus();
+      await fetchStatus();
+    } else {
+      showToast(`还原失败: ${data.msg}`, 'error');
+    }
+  } catch (err) {
+    showToast(`还原请求异常: ${err}`, 'error');
+  } finally {
+    restoreRulesBtn.disabled = false;
+  }
+});
+
 benchmarkBtn.addEventListener('click', runBenchmark);
 refreshBtn.addEventListener('click', async () => {
   appendLog('正在刷新节点与 Clash 状态...', 'info');
   await fetchStatus();
   await fetchNodes();
+  await fetchRulesStatus();
   showToast('状态已刷新', 'info');
 });
 
@@ -383,6 +464,7 @@ clearLogBtn.addEventListener('click', () => {
 (async function init() {
   await fetchStatus();
   await fetchNodes();
+  await fetchRulesStatus();
   // 首次进入如果尚未测速，自动触发一次体检
   if (allNodes.length > 0 && allNodes.every(n => n.delay === 99999 || n.delay === undefined)) {
     runBenchmark();

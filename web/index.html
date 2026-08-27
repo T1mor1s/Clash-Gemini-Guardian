@@ -78,11 +78,33 @@
         <div class="action-buttons-row">
           <button id="benchmarkBtn" class="btn btn-primary">
             <span class="btn-icon">🚀</span>
-            <span class="btn-text">一键体检与最优切换</span>
+            <span class="btn-text">一键体检切换</span>
           </button>
           <button id="refreshBtn" class="btn btn-secondary">
             <span class="btn-icon">🔄</span>
             <span class="btn-text">刷新状态</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 分流规则自动化保护卡片 -->
+      <div class="card control-card">
+        <div class="card-label">分流规则自动化保护</div>
+        <div class="guardian-control-row">
+          <div class="guardian-status-box">
+            <div class="guardian-title">Gemini 专属防漏规则</div>
+            <div class="guardian-desc" id="ruleStatusDesc">检测中...</div>
+          </div>
+          <span id="ruleStatusBadge" class="badge badge-neutral">检查中</span>
+        </div>
+        <div class="action-buttons-row">
+          <button id="injectRulesBtn" class="btn btn-success-outline">
+            <span class="btn-icon">🛡️</span>
+            <span class="btn-text">注入防漏规则</span>
+          </button>
+          <button id="restoreRulesBtn" class="btn btn-secondary" style="display:none;">
+            <span class="btn-icon">↩️</span>
+            <span class="btn-text">还原原规则</span>
           </button>
         </div>
       </div>

@@ -162,6 +162,11 @@ class GuardianAPIHandler(SimpleHTTPRequestHandler):
             })
             return
 
+        elif path == "/api/rules/status":
+            r_status = state.guardian.get_rules_status()
+            self.send_json(r_status)
+            return
+
         super().do_GET()
 
     def do_POST(self):
@@ -233,6 +238,27 @@ class GuardianAPIHandler(SimpleHTTPRequestHandler):
             state.guardian_enabled = enabled
             state.add_log(f"后台自动守护已{'开启' if enabled else '暂停'}", "info")
             self.send_json({"ok": True, "guardian_running": state.guardian_enabled})
+            return
+
+        elif path == "/api/rules/inject":
+            target_group = body_data.get("target_group", "节点选择")
+            ok, msg = state.guardian.inject_gemini_rules(target_group=target_group)
+            if ok:
+                state.add_log(f"已成功向 Clash 注入 Gemini 专属防漏规则 (锁死策略组: {target_group})", "success")
+                show_windows_toast("Clash 规则自动化", "已成功注入 Gemini 专属防漏分流规则！")
+            else:
+                state.add_log(f"注入规则失败: {msg}", "error")
+            self.send_json({"ok": ok, "msg": msg, "rules_status": state.guardian.get_rules_status()})
+            return
+
+        elif path == "/api/rules/restore":
+            ok, msg = state.guardian.restore_gemini_rules()
+            if ok:
+                state.add_log("已成功从 Clash 移除 Gemini 专属规则并恢复原状", "info")
+                show_windows_toast("Clash 规则自动化", "已恢复原配置规则")
+            else:
+                state.add_log(f"恢复规则失败: {msg}", "error")
+            self.send_json({"ok": ok, "msg": msg, "rules_status": state.guardian.get_rules_status()})
             return
 
         self.send_json({"ok": False, "msg": "未知的 API 端点"}, code=404)
